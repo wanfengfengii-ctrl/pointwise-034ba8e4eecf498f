@@ -6,6 +6,7 @@ import sqlite3
 from urllib.parse import urlsplit
 
 from auditions.confirmations import ConfirmationStore
+from auditions.evidence import EvidenceStore
 from auditions.http import post_audition, post_confirmation, post_transport
 from auditions.sessions import AuditionStore
 from cuts.http import post_cut
@@ -16,6 +17,8 @@ from releases.packages import PackageStore
 from render.blocks import BlockRenderer, BlockUnavailable
 from render.cache import BlockCache
 from render.http import get_preview
+from reviews.http import get_review, post_review, post_review_confirm
+from reviews.store import ReviewConfirmationStore, ReviewStore
 from sources.catalog import AssetCatalog
 from sources.http import post_asset
 from workspace import connect, transaction
@@ -47,6 +50,9 @@ def initialize_workspace(database, sample_rate=None):
         RevisionStore.initialize(connection)
         AuditionStore.initialize(connection)
         ConfirmationStore.initialize(connection)
+        EvidenceStore.initialize(connection)
+        ReviewConfirmationStore.initialize(connection)
+        ReviewStore.initialize(connection)
         PackageStore.initialize(connection)
     return rate
 
@@ -70,6 +76,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 return 200, get_preview(connection, self._renderer(connection), path_id(parts[1]), path.query)
             if len(parts) == 2 and parts[0] == 'releases':
                 return 200, get_release(connection, path_id(parts[1]))
+            if len(parts) == 2 and parts[0] == 'reviews':
+                return 200, get_review(connection, path_id(parts[1]))
             raise Problem(404, 'unknown endpoint')
 
         body = read_object(self)
@@ -79,6 +87,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return 201, post_cut(connection, body)
         if parts == ['auditions']:
             return 201, post_audition(connection, body)
+        if parts == ['reviews']:
+            return 201, post_review(connection, body)
         if parts == ['releases']:
             return 201, post_release(connection, self._renderer(connection), self.server.sample_rate, body)
         if len(parts) == 3 and parts[0] == 'auditions':
@@ -87,6 +97,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 return 200, post_transport(connection, self._renderer(connection), audition_id, body)
             if parts[2] == 'confirm':
                 return 200, post_confirmation(connection, audition_id, body)
+            if parts[2] == 'review-confirm':
+                return 200, post_review_confirm(connection, audition_id, body)
         raise Problem(404, 'unknown endpoint')
 
     def _renderer(self, connection):

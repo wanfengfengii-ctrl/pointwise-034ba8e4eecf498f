@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from tests.support import Workspace, decode_package
+from tests.support import segment as make_segment
 
 
 def check(actual, expected):
@@ -16,7 +17,7 @@ def call(work, method, path, body=None, status=200):
     return response
 
 
-def main():
+def package_demo():
     sample = json.loads((Path(__file__).parent / 'examples' / 'restoration.json').read_text(encoding='utf-8'))
     expected_samples = [32767, -32768, 0, 6]
     expected_windows = [[0, 3], [3, 4]]
@@ -74,6 +75,106 @@ def main():
                            'releases/issue.py', 'releases/cues.py', 'render/wave.py', 'releases/packages.py'],
             'oracle': '手算源窗 [1,4) 乘 2 后饱和，再接源窗 [4,5)。用标准 WAV 读取器及小端整数解码重领取件。',
         }, ensure_ascii=False, separators=(',', ':')))
+    return 0
+
+
+def _abcd_fixture(work):
+    clips = {}
+    for name, samples in (("A", [31, 7]), ("B", [8]), ("C", [9]), ("D", [0, 11])):
+        asset = call(work, 'POST', '/assets', {
+            'source': f'馆藏声带 {name}', 'sample_rate': work.sample_rate, 'samples': samples,
+        }, 201)
+        clips[name] = make_segment(asset['asset_id'], 0, len(samples))
+    parent = call(work, 'POST', '/cuts', {
+        'project_id': 'screening-restoration',
+        'segments': [clips[name] for name in 'ABCD'],
+    }, 201)
+    target = call(work, 'POST', '/cuts', {
+        'project_id': 'screening-restoration', 'parent_revision_id': parent['revision_id'],
+        'segments': [clips['A'], clips['D']],
+    }, 201)
+    return parent, target
+
+
+def _listen_parent_half(work, parent_id, offset):
+    audition = call(work, 'POST', '/auditions', {'revision_id': parent_id}, 201)['audition_id']
+    call(work, 'POST', f'/auditions/{audition}/transport', {'op': 'seek', 'position': offset})
+    call(work, 'POST', f'/auditions/{audition}/transport', {'op': 'advance', 'frames': 3})
+    confirmed = call(work, 'POST', f'/auditions/{audition}/review-confirm', {})
+    check(confirmed, {'audition_id': audition, 'revision_id': parent_id})
+    return audition
+
+
+def carry_demo():
+    """Real-HTTP walkthrough: unheard seam blocks issue, relisten, reopen."""
+    with Workspace(block_frames=2) as work:
+        parent, target = _abcd_fixture(work)
+        revision = target['revision_id']
+        first = _listen_parent_half(work, parent['revision_id'], 0)
+        second = _listen_parent_half(work, parent['revision_id'], 3)
+
+        unheard = call(work, 'POST', '/reviews', {
+            'target_revision_id': revision, 'audition_ids': [first, second],
+        }, 201)
+        check(unheard['ready'], False)
+        check(unheard['missing_seams'], [2])
+        print('POINTWISE_REVIEW_UNHEARD ' + json.dumps(unheard, ensure_ascii=False))
+
+        # The not-ready verdict must not issue a release.
+        blocked_status, blocked = work.request('POST', '/releases', {
+            'revision_id': revision, 'review_id': unheard['review_id'],
+        })
+        check(blocked_status, 409)
+        print('POINTWISE_REVIEW_BLOCKED ' + json.dumps(
+            {'status': blocked_status, 'error': blocked.get('error')}, ensure_ascii=False))
+
+        # Supplementary continuous listening on the new cut crosses A1 -> D0.
+        bridge = call(work, 'POST', '/auditions', {'revision_id': revision}, 201)['audition_id']
+        call(work, 'POST', f'/auditions/{bridge}/transport', {'op': 'seek', 'position': 1})
+        crossed = call(work, 'POST', f'/auditions/{bridge}/transport', {'op': 'advance', 'frames': 3})
+        check(crossed['samples'], [7, 0, 11])
+        call(work, 'POST', f'/auditions/{bridge}/review-confirm', {})
+
+        ready = call(work, 'POST', '/reviews', {
+            'target_revision_id': revision, 'audition_ids': [first, second, bridge],
+        }, 201)
+        check(ready['ready'], True)
+        check(ready['missing_seams'], [])
+        print('POINTWISE_REVIEW_READY ' + json.dumps(ready, ensure_ascii=False))
+
+        issued = call(work, 'POST', '/releases', {
+            'revision_id': revision, 'review_id': ready['review_id'],
+        }, 201)
+        release_path = f"/releases/{issued['release_id']}"
+        before = call(work, 'GET', release_path)
+        check(before['confirmation_id'], None)
+        check(before['review_id'], ready['review_id'])
+        check(decode_package(before)['samples'], [31, 7, 0, 11])
+
+        # Reclaim rendered blocks, restart the service and claim by old number.
+        work.server.cache.reclaim()
+        work.reopen()
+        after = call(work, 'GET', release_path)
+        check(after, before)
+        check(call(work, 'GET', f"/reviews/{ready['review_id']}"), ready)
+        samples = decode_package(after)['samples']
+        check(samples, [31, 7, 0, 11])
+        print('POINTWISE_REVIEW_DEMO ' + json.dumps({
+            'unheard_verdict': unheard,
+            'missing_seam_release_status': blocked_status,
+            'ready_review_id': ready['review_id'],
+            'release_id': issued['release_id'],
+            'review_id': after['review_id'],
+            'confirmation_id': after['confirmation_id'],
+            'reopen_claim_matches': after == before,
+            'wav_samples': samples,
+        }, ensure_ascii=False, separators=(',', ':')))
+    return 0
+
+
+def main():
+    package_demo()
+    carry_demo()
     return 0
 
 

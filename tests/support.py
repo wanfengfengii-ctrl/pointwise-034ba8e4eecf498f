@@ -65,7 +65,10 @@ class Workspace:
         return closing(connect(self.database))
 
     def count(self, table):
-        if table not in {'assets', 'revisions', 'segments', 'auditions', 'confirmations', 'packages'}:
+        if table not in {
+            'assets', 'revisions', 'segments', 'auditions', 'confirmations', 'packages',
+            'audition_evidence', 'review_confirmations', 'reviews',
+        }:
             raise ValueError('unknown workspace table')
         with self.connection() as connection:
             return connection.execute(f'SELECT count(*) FROM {table}').fetchone()[0]

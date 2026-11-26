@@ -9,7 +9,9 @@ from releases.packages import PackageStore
 def post_release(connection, renderer, sample_rate, body):
     revision_id = require_id(body.get('revision_id'), 'revision_id')
     try:
-        package = issue_release(connection, renderer, sample_rate, revision_id, body.get('confirmation_id'))
+        package = issue_release(
+            connection, renderer, sample_rate, revision_id, body
+        )
     except UnknownReleaseRevision as error:
         raise Problem(404, str(error)) from error
     except IneligibleRelease as error:
@@ -21,10 +23,17 @@ def get_release(connection, release_id):
     package = PackageStore(connection).get(release_id)
     if package is None:
         raise Problem(404, 'unknown release')
-    return {
+    payload = {
         'release_id': package.release_id,
         'revision_id': package.revision_id,
-        'confirmation_id': package.confirmation_id,
-        'cue_sheet': package.cue_sheet,
-        'wav_base64': base64.b64encode(package.wav).decode('ascii'),
     }
+    if package.review_id is not None:
+        # Carry releases explicitly carry the verdict and a null confirmation.
+        payload['review_id'] = package.review_id
+        payload['confirmation_id'] = None
+    else:
+        # Original same-revision confirmation packages keep README's shape.
+        payload['confirmation_id'] = package.confirmation_id
+    payload['cue_sheet'] = package.cue_sheet
+    payload['wav_base64'] = base64.b64encode(package.wav).decode('ascii')
+    return payload
