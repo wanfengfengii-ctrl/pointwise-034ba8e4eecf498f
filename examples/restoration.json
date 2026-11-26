@@ -1,0 +1,12 @@
+{
+  "project_id": "matinee-restoration",
+  "asset": {
+    "source": "市电影资料馆片库，早场正片卷一",
+    "sample_rate": 8000,
+    "samples": [13, 20000, -20000, 0, 6]
+  },
+  "segments": [
+    {"start": 1, "end": 4, "gain": 2},
+    {"start": 4, "end": 5, "gain": 1}
+  ]
+}
